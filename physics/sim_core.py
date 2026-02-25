@@ -1,3 +1,13 @@
+"""
+Differentiable physics core.
+
+Implements a fully differentiable simulation of a driven nonlinear resonator system
+using torch and torchdiffeq. Provides pulse preprocessing, ODE dynamics, physical
+metrics, reward computation, and full simulation pipeline.
+
+This module is the core physical model of the project.
+"""
+
 import matplotlib.pyplot as plt
 import numpy as np
 from torchdiffeq import odeint
@@ -32,6 +42,16 @@ ideal_photon = 0.05  # target photon number after reset
 # Utility functions
 # ==============================
 def gaussian_kernel(length=15, std=2.0):
+    """
+    Create a normalized 1D Gaussian kernel.
+
+    Args:
+        length (int): Kernel length.
+        std (float): Standard deviation of the Gaussian.
+
+    Returns:
+        torch.Tensor: Normalized 1D Gaussian kernel.
+    """
     x = torch.linspace(-length // 2, length // 2, length)
     g = torch.exp(-x ** 2 / (2 * std ** 2))
     return g / g.sum()
@@ -41,6 +61,15 @@ def gaussian_kernel(length=15, std=2.0):
 
 def smooth_signal(signal, kernel):
     """
+    Smooth a 1D signal using convolution.
+
+    Args:
+        signal (torch.Tensor): 1D input signal.
+        kernel (torch.Tensor): 1D convolution kernel.
+
+    Returns:
+        torch.Tensor: Smoothed signal of same length.
+
     signal: 1D torch tensor
     kernel: 1D torch tensor
     returns: 1D torch tensor (same length as signal)
@@ -64,11 +93,32 @@ def smooth_signal(signal, kernel):
 
 
 def normalize_pulse(pulse, max_amp):
+    """
+    Apply amplitude normalization with clipping.
+
+    Args:
+        pulse (torch.Tensor): Input pulse.
+        max_amp (float): Maximum allowed amplitude.
+
+    Returns:
+        torch.Tensor: Amplitude-limited pulse.
+    """
     scale = torch.clamp(max_amp / torch.abs(pulse), 0, 1)
     return pulse * scale
 
 
 def gradient_clip(pulse, max_grad, dt):
+    """
+    Clip pulse time-derivative to enforce slope constraints.
+
+    Args:
+        pulse (torch.Tensor): Input pulse.
+        max_grad (float): Maximum allowed derivative.
+        dt (float): Time step.
+
+    Returns:
+        torch.Tensor: Gradient-limited pulse.
+    """
     dp = torch.diff(pulse) / dt
     dp = torch.clamp(dp, -max_grad, max_grad)
     out = torch.cumsum(torch.cat((pulse[0:1], dp * dt)), dim=0)
@@ -77,6 +127,16 @@ def gradient_clip(pulse, max_grad, dt):
 
 def bandwidth_limit(pulse, max_freq, t_action):
     """
+    Apply frequency-domain bandwidth filtering.
+
+    Args:
+        pulse (torch.Tensor): Input pulse.
+        max_freq (float): Maximum allowed frequency.
+        t_action (torch.Tensor): Time axis.
+
+    Returns:
+        torch.Tensor: Bandwidth-limited pulse.
+
     pulse: 1D torch tensor
     max_freq: scalar
     t_action: 1D torch tensor (time axis)
@@ -108,11 +168,22 @@ def bandwidth_limit(pulse, max_freq, t_action):
 # Langevin ODE model
 # ==============================
 def resonator_ode(t, y, drive_func):
+    """
+    Langevin-type ODE for nonlinear driven resonator dynamics.
+
+    Args:
+        t (torch.Tensor): Time.
+        y (torch.Tensor): State vector [Re(α_g), Im(α_g), Re(α_e), Im(α_e)].
+        drive_func (callable): Drive interpolation function.
+
+    Returns:
+        torch.Tensor: Time derivative of state.
+    """
     rg_r, rg_i, re_r, re_i = y
     drive = drive_func(t)
 
-    rg = rg_r + 1j * rg_i
-    re = re_r + 1j * re_i
+    rg = torch.complex(rg_r, rg_i)# ie    rg = rg_r + 1j * rg_i
+    re = torch.complex(re_r, re_i)    # ie re = re_r + 1j * re_i
 
     d_rg = rg * (-0.5 * kappa - 0.5j * chi + 1j * kerr * torch.abs(rg) ** 2) - 1j * drive
     d_re = re * (-0.5 * kappa + 0.5j * chi + 1j * kerr * torch.abs(re) ** 2) - 1j * drive
@@ -124,6 +195,15 @@ def resonator_ode(t, y, drive_func):
 
 
 def simulate_resonator(drive):
+    """
+    Simulate resonator dynamics for a given drive pulse.
+
+    Args:
+        drive (torch.Tensor): Drive pulse of length N_ACTION.
+
+    Returns:
+        torch.Tensor: State trajectory of shape (N_SIM, 4).
+    """
     """
     drive: 1D torch tensor
     Returns: tensor of shape (time, 4)
@@ -164,20 +244,68 @@ def simulate_resonator(drive):
 # Physics metrics
 # ==============================
 def photons(res):
-    rg = res[:, 0] + 1j * res[:, 1]
-    re = res[:, 2] + 1j * res[:, 3]
+    """
+    Compute photon numbers for ground and excited states.
+
+    Args:
+        res (torch.Tensor): State trajectory (N_SIM, 4).
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: (n_g, n_e)
+    """
+    rg = torch.complex(res[:, 0], res[:, 1])
+    re = torch.complex(res[:, 2], res[:, 3])
+
     ng = torch.abs(rg) ** 2
     ne = torch.abs(re) ** 2
     return ng, ne
 
+def reset_time_metric(ng, ne, kappa, n_ideal):
+    """
+    Compute cavity reset time based on exponential decay model.
+
+    Args:
+        ng (torch.Tensor): Ground photon number vs time.
+        ne (torch.Tensor): Excited photon number vs time.
+        kappa (float): Resonator decay rate.
+        n_ideal (float): Target photon threshold.
+
+    Returns:
+        torch.Tensor: Reset time.
+    """
+    n0 = torch.maximum(ng[-1], ne[-1])
+    n0 = torch.clamp(n0, min=n_ideal * 1.0001)
+    delta_t = (1.0 / kappa) * torch.log(n0 / n_ideal)
+    return T1 + delta_t
+
 
 def fidelity(ng, ne, scale=10):
+    """
+    Compute measurement fidelity from state separation.
+
+    Args:
+        ng (torch.Tensor): Ground photon number.
+        ne (torch.Tensor): Excited photon number.
+        scale (float): Separation scaling factor.
+
+    Returns:
+        torch.Tensor: Fidelity vs time.
+    """
     sep = torch.abs(torch.sqrt(ng) - torch.sqrt(ne))
     F = 0.5 * (1 + torch.erf(sep * scale))
     return F
 
 
 def smoothness_metric(pulse):
+    """
+    Compute pulse smoothness via curvature energy.
+
+    Args:
+        pulse (torch.Tensor): Input pulse.
+
+    Returns:
+        torch.Tensor: Smoothness scalar.
+    """
     # second derivative (curvature)
     second_derivative = torch.diff(pulse, n=2)
 
@@ -192,6 +320,16 @@ def smoothness_metric(pulse):
 
 def bandwidth_metric(pulse, t_action, thresh=0.05):
     """
+    Estimate effective bandwidth of pulse.
+
+    Args:
+        pulse (torch.Tensor): Input pulse.
+        t_action (torch.Tensor): Time axis.
+        thresh (float): Spectral threshold ratio.
+
+    Returns:
+        torch.Tensor: Bandwidth estimate.
+
     pulse: 1D torch tensor
     t_action: 1D torch tensor (time axis)
     """
@@ -222,23 +360,41 @@ def bandwidth_metric(pulse, t_action, thresh=0.05):
 # ==============================
 # Reward function
 # ==============================
-def compute_reward(F, ng, pulse):
+def compute_reward(F, ng, ne, pulse):
+    """
+    Compute scalar reward from physical metrics.
+
+    Combines fidelity, photon population, smoothness, and bandwidth
+    into a single scalar reward.
+
+    Args:
+        F (torch.Tensor): Fidelity vs time.
+        ng (torch.Tensor): Ground photon number.
+        pulse (torch.Tensor): Control pulse.
+
+    Returns:
+        Tuple[torch.Tensor, dict]: (reward, metrics_dict)
+    """
     max_pf = -torch.log10(1 - torch.max(F) + 1e-9)
-    max_photon = torch.max(ng)
+    max_photon = torch.max(torch.maximum(ng, ne))
     smooth = smoothness_metric(pulse)
     bw = bandwidth_metric(pulse, t_action)
+    t_reset = reset_time_metric(ng, ne, kappa, ideal_photon)
 
     reward = (
             + 10 * max_pf
             - 5 * max_photon
             - 2 * smooth
             - 2 * bw
+            - 3 * t_reset / T1     # reset-time penalty, normalised
     )
     return reward, {
+        "fidelity": torch.max(F),
         "max_pf": max_pf,
         "max_photon": max_photon,
         "smoothness": smooth,
-        "bandwidth": bw
+        "bandwidth": bw,
+        "t_reset": t_reset
     }
 
 
@@ -247,6 +403,16 @@ def compute_reward(F, ng, pulse):
 # ==============================
 def interp1d_torch(y, x, t):
     """
+    Differentiable 1D linear interpolation in torch.
+
+    Args:
+        y (torch.Tensor): Signal values.
+        x (torch.Tensor): Sample positions.
+        t (torch.Tensor): Query positions.
+
+    Returns:
+        torch.Tensor: Interpolated values.
+
     True linear interpolation at positions t.
     Assumes x is sorted and uniform.
     """
@@ -269,6 +435,15 @@ def interp1d_torch(y, x, t):
 
 def resize_1d(y, N):
     """
+    Resize 1D tensor using differentiable interpolation.
+
+    Args:
+        y (torch.Tensor): Input signal.
+        N (int): Target length.
+
+    Returns:
+        torch.Tensor: Resized signal.
+
     Resize 1D tensor y to length N in pytorch tensor
     Similar to np.resize: repeats or interpolates as needed.
     """
@@ -281,6 +456,24 @@ def resize_1d(y, N):
 # Full pipeline
 # ==============================
 def evaluate_pulse(action):
+    """
+    Full physics evaluation pipeline.
+
+    Converts model action into physical pulse, simulates resonator dynamics,
+    computes physical metrics, and returns reward and observables.
+
+    Args:
+        action (torch.Tensor): Model output control signal.
+
+    Returns:
+        Tuple:
+            reward (torch.Tensor)
+            info (dict)
+            pulse (torch.Tensor)
+            ng (torch.Tensor)
+            ne (torch.Tensor)
+            F (torch.Tensor)
+    """
     # Ensure input is correct length
     if len(action) != N_ACTION:
         action = resize_1d(action, N_ACTION)
@@ -297,7 +490,7 @@ def evaluate_pulse(action):
     ng, ne = photons(res)
     F = fidelity(ng, ne)
 
-    reward, info = compute_reward(F, ng, pulse)
+    reward, info = compute_reward(F, ng, ne, pulse)
 
     # Ensure outputs are fixed-size arrays for DL
     pulse = resize_1d(pulse, N_ACTION)

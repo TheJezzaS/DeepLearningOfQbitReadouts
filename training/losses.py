@@ -10,5 +10,5 @@ class PhysicsLoss:
             - self.w_fid * m["fidelity"]
             + self.w_bw * m["bandwidth"]
             + self.w_sm * m["smoothness"]
-            + self.w_time * m["photon_time"]
+            + self.w_time * m["t_reset"]
         )

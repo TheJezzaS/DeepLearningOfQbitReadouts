@@ -26,7 +26,6 @@ The system is designed so that:
 physics/ → physical simulator (system dynamics)
 models/ → deep learning architectures
 training/ → training logic and optimizers
-configs/ → hyperparameters and constants
 experiments/ → executable entry points (main programs)
 
 
@@ -303,7 +302,6 @@ where:
 - `models/` = hypotheses  
 - `training/` = learning  
 - `experiments/` = science  
-- `results/` = knowledge  
 
 Running a file in `experiments/` is not just running code —  
 it is running a **scientific experiment** on a physical system using a specific learning architecture.

@@ -28,7 +28,7 @@ class ReadoutPhysics:
         Returns:
             dict: Dictionary containing physical observables, metrics, and reward.
         """
-        reward, info, pulse, ng, ne, F = evaluate_pulse(pulse)
+        reward, info, pulse, ng, ne, F, res = evaluate_pulse(pulse)
 
         return {
             "fidelity": info["fidelity"],

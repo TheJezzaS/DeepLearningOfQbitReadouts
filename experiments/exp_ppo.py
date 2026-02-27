@@ -1,45 +1,48 @@
-import sys
-import os
+import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import EvalCallback
-from physics.env import QubitReadoutEnv
+import torch
+import time
+from physics.sim_main import ReadoutPhysics
+from models.ppo import PPOActorCritic
+from training.ppo_trainer import PPOTrainer
 
-# 1. Initialize the Black-Box Environment
-env = QubitReadoutEnv()
+device = torch.device("cpu")
 
-# 2. Initialize the PPO Agent
-# MlpPolicy creates the Actor and Critic neural networks automatically.
-# We set the learning rate to 3e-4 to exactly match the research paper.
-model = PPO(
-    policy="MlpPolicy",
-    env=env,
-    learning_rate=3e-4,
-    n_steps=2048,           # Collect 2048 pulses before updating the networks
-    batch_size=64,
-    gamma=0.99,             # Discount factor
-    verbose=1,
-    tensorboard_log="./ppo_readout_logs/"
-)
+# --- config ---
+state_dim = 16        # dummy state
+pulse_dim = 121       # N_ACTION
+batch_size = 32
+epochs = 5000
+gamma = 0.99
 
-# 3. Setup an Evaluation Callback
-# This automatically saves the best model whenever it hits a new high score
-eval_callback = EvalCallback(
-    env, 
-    best_model_save_path='./saved_models/',
-    log_path='./ppo_readout_logs/', 
-    eval_freq=2048,
-    deterministic=True, 
-    render_eval=False
-)
+# --- systems ---
+physics = ReadoutPhysics()
+model = PPOActorCritic(state_dim, pulse_dim).to(device)
+opt = torch.optim.Adam(model.parameters(), lr=3e-4)
 
-print('------------------------------STARTING PPO TRAINING-------------------------------')
-print("WARNING: Model-Free RL is highly sample inefficient.")
-print("This will require significantly more pulses to converge than the Differentiable Physics approach.")
+trainer = PPOTrainer(model, physics, opt)
 
-# 4. Train the Agent
-# 500,000 timesteps = 500,000 pulses evaluated
-model.learn(total_timesteps=50, callback=eval_callback)
+print("PPO initialized")
 
-print("Training Complete!")
+# Dummy state (stateless env like paper)
+def sample_states(B):
+    return torch.zeros(B, state_dim)
+
+for epoch in range(epochs):
+    states = sample_states(batch_size)
+
+    actions, log_probs, values, rewards, infos = trainer.rollout(states)
+
+    # returns = rewards (single-step env like paper)
+    returns = rewards.detach()
+    advantages = returns - values.detach()
+
+    loss = trainer.ppo_update(
+        states, actions, log_probs.detach(),
+        returns, advantages
+    )
+
+    if epoch % 50 == 0:
+        avg_fid = torch.mean(torch.tensor([i["fidelity"] for i in infos])).item()
+        print(f"[{epoch}] loss={loss:.4f}  avg_fidelity={avg_fid:.4f}")

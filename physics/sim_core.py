@@ -507,7 +507,7 @@ def evaluate_pulse(action):
     ne = resize_1d(ne, N_SIM)
     F = resize_1d(F, N_SIM)
 
-    return reward, info, pulse, ng, ne, F
+    return reward, info, pulse, ng, ne, F, res
 
 
 

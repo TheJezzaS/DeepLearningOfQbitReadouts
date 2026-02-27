@@ -3,6 +3,7 @@ import os
 # Add the parent directory to Python's import path to fix ModuleNotFoundError
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import numpy as np
 import torch
 import time
 import matplotlib.pyplot as plt
@@ -10,7 +11,6 @@ import torch.optim.lr_scheduler as lr_scheduler
 
 
 from physics.sim_core import evaluate_pulse, t_action, t_sim
-
 from physics.sim_main import ReadoutPhysics
 from training.losses import PhysicsLoss
 from training.trainer import PhysicsTrainer
@@ -22,25 +22,23 @@ from models.mlp import PulseMLP
 device = torch.device("cpu")
 print(f"Using device: {device}")
 
-# --- config ---
+#  config
 latent_dim = 32
 pulse_dim = 128
-batch_size = 2
+batch_size = 20
 epochs = 20
-size_per_epoch = 10
+size_per_epoch = 100
 
-# --- systems ---
+#  systems initialization
 physics = ReadoutPhysics()
 model = PulseMLP(latent_dim, pulse_dim)
 
-# Note: Ensure your PhysicsLoss in losses.py matches the updated code we discussed
-loss_fn = PhysicsLoss() 
+loss_fn = PhysicsLoss()
 
-# --- Optimizer with Weight Decay & Higher Initial LR ---
-# Starting at 3e-4 to match the initial momentum used in the research paper
+# Starting LR at 3e-4 to match the initial momentum used in the research paper
 opt = torch.optim.Adam(model.parameters(), lr=3e-4, weight_decay=1e-5)
 
-# --- Adaptive Learning Rate Scheduler ---
+# Adaptive Learning Rate Scheduler
 # Drops the learning rate by half (factor=0.5) if the physics loss stalls for 3 epochs (patience=3)
 scheduler = lr_scheduler.ReduceLROnPlateau(opt, mode='min', factor=0.5, patience=3)
 
@@ -51,7 +49,7 @@ loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size)
 
 print('------------------------------INITIALIZATIONS FINISHED-------------------------------')
 
-# --- Tracking arrays for the Learning Curve ---
+#  Tracking arrays for the Learning Curve
 history_loss = []
 history_fidelity = []
 
@@ -96,7 +94,7 @@ for epoch in range(epochs):
     scheduler.step(avg_loss)
     current_lr = opt.param_groups[0]['lr']
 
-    print(f"Epoch {epoch}/{epochs-1} | Avg Loss: {avg_loss:.6f} | Avg Fidelity: {avg_fid:.4f} | LR: {current_lr:.6f} | Time: {time.time() - epoch_start:.2f}s")
+    print(f"Epoch {epoch}/{epochs-1} | Avg Loss: {avg_loss:.4f} | Avg Fidelity: {avg_fid:.4f} | LR: {current_lr:.6f} | Time: {time.time() - epoch_start:.2f}s")
 
     if avg_fid > best_fidelity:
         best_fidelity = avg_fid

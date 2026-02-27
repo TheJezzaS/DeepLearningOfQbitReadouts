@@ -8,6 +8,9 @@ import time
 import matplotlib.pyplot as plt
 import torch.optim.lr_scheduler as lr_scheduler
 
+
+from physics.sim_core import evaluate_pulse, t_action, t_sim
+
 from physics.sim_main import ReadoutPhysics
 from training.losses import PhysicsLoss
 from training.trainer import PhysicsTrainer
@@ -15,7 +18,8 @@ from training.datasets import LatentDataset
 from models.mlp import PulseMLP
 
 # --- Device Configuration ---
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
 print(f"Using device: {device}")
 
 # --- config ---
@@ -50,6 +54,12 @@ print('------------------------------INITIALIZATIONS FINISHED-------------------
 # --- Tracking arrays for the Learning Curve ---
 history_loss = []
 history_fidelity = []
+
+
+save_dir = "trained_models"
+os.makedirs(save_dir, exist_ok=True) # Creates the folder safely
+best_fidelity = 0.0
+best_model_path = os.path.join(save_dir, "best_pulse_mlp.pth")
 
 # --- training ---
 global_start = time.time()
@@ -88,19 +98,27 @@ for epoch in range(epochs):
 
     print(f"Epoch {epoch}/{epochs-1} | Avg Loss: {avg_loss:.6f} | Avg Fidelity: {avg_fid:.4f} | LR: {current_lr:.6f} | Time: {time.time() - epoch_start:.2f}s")
 
+    if avg_fid > best_fidelity:
+        best_fidelity = avg_fid
+        torch.save(model.state_dict(), best_model_path)
+        print(f"New best fidelity! Model saved to {best_model_path}")
+
+
+
 print("Training Complete. Generating Graphs...")
 
 # ==========================================================
 # --- Plotting the Article's Graphs ---
 # ==========================================================
-model.eval() # Set model to evaluation mode so layers like Dropout (if added) behave correctly
+model.load_state_dict(torch.load(best_model_path, map_location=device))
+model.eval() 
 with torch.no_grad():
     # Generate one final test pulse
     test_z = torch.randn(1, latent_dim).to(device)
-    final_pulse = model(test_z).squeeze() 
+    final_pulse = model(test_z).squeeze()
     
     # Run it through the physics simulator
-    from physics.sim_core import evaluate_pulse, t_action, t_sim
+   
     
     reward, info, pulse_out, ng, ne, F, res = evaluate_pulse(final_pulse)
 
@@ -174,9 +192,9 @@ plt.legend()
 plt.grid(True)
 
 
-
-
-
+save_path = "trained_pulse_mlp.pth"
+torch.save(model.state_dict(), save_path)
+print(f"Model successfully saved to {save_path}")
 
 
 plt.show()

@@ -37,6 +37,8 @@ class ReadoutPhysics:
             "bandwidth": info["bandwidth"],
             "smoothness": info["smoothness"],
             "t_reset": info["t_reset"],
+            "a_start": info["a_start"],
+            "a_end": info["a_end"],      
             "reward": reward,
             "pulse": pulse,
             "ng": ng,

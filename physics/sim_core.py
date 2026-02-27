@@ -77,8 +77,7 @@ def smooth_signal(signal, kernel):
 
     # Ensure tensors
     signal = signal.float()
-    kernel = kernel.float()
-
+    kernel = kernel.float().to(signal.device)
     # Reshape for conv1d
     signal = signal.view(1, 1, -1)          # (batch=1, channels=1, length)
     kernel = kernel.view(1, 1, -1)          # (out_ch=1, in_ch=1, kernel_size)
@@ -146,8 +145,7 @@ def bandwidth_limit(pulse, max_freq, t_action):
     dt = t_action[1] - t_action[0]
 
     # Torch FFT frequency bins
-    freqs = torch.fft.fftfreq(len(pulse), d=dt)
-
+    freqs = torch.fft.fftfreq(len(pulse), d=dt, device=pulse.device)
     # Forward FFT
     F = torch.fft.fft(pulse)
 
@@ -279,19 +277,23 @@ def reset_time_metric(ng, ne, kappa, n_ideal):
     return T1 + delta_t
 
 
-def fidelity(ng, ne, scale=10):
+def fidelity(res, scale=10):
     """
-    Compute measurement fidelity from state separation.
-
+    Compute measurement fidelity from phase-space state separation.
+    
     Args:
-        ng (torch.Tensor): Ground photon number.
-        ne (torch.Tensor): Excited photon number.
+        res (torch.Tensor): State trajectory (N_SIM, 4).
         scale (float): Separation scaling factor.
 
     Returns:
         torch.Tensor: Fidelity vs time.
     """
-    sep = torch.abs(torch.sqrt(ng) - torch.sqrt(ne))
+    rg = torch.complex(res[:, 0], res[:, 1])
+    re = torch.complex(res[:, 2], res[:, 3])
+    
+    # Calculate the true Euclidean distance in the complex plane
+    sep = torch.abs(rg - re)
+    
     F = 0.5 * (1 + torch.erf(sep * scale))
     return F
 
@@ -342,7 +344,7 @@ def bandwidth_metric(pulse, t_action, thresh=0.05):
 
     # Frequency axis
     freqs = torch.fft.fftshift(
-        torch.fft.fftfreq(len(pulse), d=dt)
+        torch.fft.fftfreq(len(pulse), d=dt, device=pulse.device)
     )
 
     maxF = torch.max(F)
@@ -381,20 +383,27 @@ def compute_reward(F, ng, ne, pulse):
     bw = bandwidth_metric(pulse, t_action)
     t_reset = reset_time_metric(ng, ne, kappa, ideal_photon)
 
+    a_start = torch.abs(pulse[0])
+    a_end = torch.abs(pulse[-1])
+
     reward = (
             + 10 * max_pf
             - 5 * max_photon
             - 2 * smooth
             - 2 * bw
-            - 3 * t_reset / T1     # reset-time penalty, normalised
+            - 3 * t_reset / T1
+            - 100 * (a_start + a_end)  # Added to the logging reward
     )
+
     return reward, {
         "fidelity": torch.max(F),
         "max_pf": max_pf,
         "max_photon": max_photon,
         "smoothness": smooth,
         "bandwidth": bw,
-        "t_reset": t_reset
+        "t_reset": t_reset,
+        "a_start": a_start,
+        "a_end": a_end
     }
 
 
@@ -478,8 +487,7 @@ def evaluate_pulse(action):
     if len(action) != N_ACTION:
         action = resize_1d(action, N_ACTION)
 
-    kernel = gaussian_kernel(15, 2.0)
-
+    kernel = gaussian_kernel(15, 2.0).to(action.device)
     pulse = normalize_pulse(action, mu)
     pulse = smooth_signal(pulse, kernel)
     pulse = gradient_clip(pulse, max_grad=40, dt=t_action[1] - t_action[0])
@@ -488,7 +496,8 @@ def evaluate_pulse(action):
 
     res = simulate_resonator(pulse)
     ng, ne = photons(res)
-    F = fidelity(ng, ne)
+
+    F = fidelity(res)
 
     reward, info = compute_reward(F, ng, ne, pulse)
 

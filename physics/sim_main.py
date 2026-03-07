@@ -32,7 +32,7 @@ class ReadoutPhysics:
 
         return {
             "fidelity": info["fidelity"],
-            "max_pf": info["max_pf"],
+            # "max_pf": info["max_pf"],
             "max_photon": info["max_photon"],
             "bandwidth": info["bandwidth"],
             "smoothness": info["smoothness"],

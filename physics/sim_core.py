@@ -362,50 +362,118 @@ def bandwidth_metric(pulse, t_action, thresh=0.05):
 # ==============================
 # Reward function
 # ==============================
+# def compute_reward(F, ng, ne, pulse):
+#     """
+#     Compute scalar reward from physical metrics.
+#
+#     Combines fidelity, photon population, smoothness, and bandwidth
+#     into a single scalar reward.
+#
+#     Args:
+#         F (torch.Tensor): Fidelity vs time.
+#         ng (torch.Tensor): Ground photon number.
+#         pulse (torch.Tensor): Control pulse.
+#
+#     Returns:
+#         Tuple[torch.Tensor, dict]: (reward, metrics_dict)
+#     """
+#     max_pf = -torch.log10(1 - torch.max(F) + 1e-9)
+#     max_photon = torch.max(torch.maximum(ng, ne))
+#     smooth = smoothness_metric(pulse)
+#     bw = bandwidth_metric(pulse, t_action)
+#     t_reset = reset_time_metric(ng, ne, kappa, ideal_photon)
+#
+#     a_start = torch.abs(pulse[0])
+#     a_end = torch.abs(pulse[-1])
+#
+#     reward = (
+#             + 10 * max_pf
+#             - 5 * max_photon
+#             - 2 * smooth
+#             - 2 * bw
+#             - 3 * t_reset / T1
+#             - 100 * (a_start + a_end)  # Added to the logging reward
+#     )
+#
+#     return reward, {
+#         "fidelity": torch.max(F),
+#         "max_pf": max_pf,
+#         "max_photon": max_photon,
+#         "smoothness": smooth,
+#         "bandwidth": bw,
+#         "t_reset": t_reset,
+#         "a_start": a_start,
+#         "a_end": a_end
+#     }
+
 def compute_reward(F, ng, ne, pulse):
     """
     Compute scalar reward from physical metrics.
 
-    Combines fidelity, photon population, smoothness, and bandwidth
-    into a single scalar reward.
+    Combines fidelity, photon population, smoothness, bandwidth,
+    and reset time into a single scalar reward.
 
     Args:
-        F (torch.Tensor): Fidelity vs time.
-        ng (torch.Tensor): Ground photon number.
+        F (torch.Tensor): Fidelity vs time (0-1).
+        ng (torch.Tensor): Ground photon number vs time.
+        ne (torch.Tensor): Excited photon number vs time.
         pulse (torch.Tensor): Control pulse.
+        t_action (torch.Tensor): Time vector for pulse (for bandwidth).
+        T1 (float): Qubit relaxation time.
+        ideal_photon (float): Threshold photon number for reset.
 
     Returns:
         Tuple[torch.Tensor, dict]: (reward, metrics_dict)
     """
-    max_pf = -torch.log10(1 - torch.max(F) + 1e-9)
-    max_photon = torch.max(torch.maximum(ng, ne))
-    smooth = smoothness_metric(pulse)
-    bw = bandwidth_metric(pulse, t_action)
-    t_reset = reset_time_metric(ng, ne, kappa, ideal_photon)
 
+    # --- Physical metrics ---
+    fidelity = torch.max(F)                     # [0,1]
+    max_photon = torch.max(torch.maximum(ng, ne))  # peak photon population
+    smooth = smoothness_metric(pulse)           # pulse smoothness
+    bw = bandwidth_metric(pulse, t_action)      # bandwidth measure
+    t_reset = reset_time_metric(ng, ne, kappa, ideal_photon)  # normalized by T1
+
+    # --- Edge penalties ---
     a_start = torch.abs(pulse[0])
     a_end = torch.abs(pulse[-1])
 
+    # --- Normalization constants (empirically chosen for O(1) reward) ---
+    photon_ref = 5.0      # typical max photon number
+    smooth_ref = 1.0      # typical smoothness
+    bw_ref = 1.0          # typical bandwidth
+    reset_ref = T1        # normalize reset time by T1
+    edge_ref = 0.2        # typical max edge amplitude
+
+    # --- Normalize metrics ---
+    photon_term = max_photon / photon_ref
+    smooth_term = smooth / smooth_ref
+    bw_term = bw / bw_ref
+    treset_term = t_reset / reset_ref
+    edge_term = (a_start + a_end) / edge_ref
+
+    # --- Combine into scalar reward (paper-style) ---
     reward = (
-            + 10 * max_pf
-            - 5 * max_photon
-            - 2 * smooth
-            - 2 * bw
-            - 3 * t_reset / T1
-            - 100 * (a_start + a_end)  # Added to the logging reward
+        + 1.0 * fidelity        # maximize fidelity
+        - 0.5 * photon_term     # penalize photon population
+        - 0.2 * smooth_term     # smoothness penalty
+        - 0.2 * bw_term         # bandwidth penalty
+        - 0.3 * treset_term     # reset time penalty
+        - 0.1 * edge_term       # small penalty for pulse edges
     )
 
-    return reward, {
-        "fidelity": torch.max(F),
-        "max_pf": max_pf,
+    # --- Metrics dictionary for logging ---
+    metrics = {
+        "fidelity": fidelity,
         "max_photon": max_photon,
         "smoothness": smooth,
         "bandwidth": bw,
         "t_reset": t_reset,
         "a_start": a_start,
-        "a_end": a_end
+        "a_end": a_end,
+        "reward": reward
     }
 
+    return reward, metrics
 
 # ==============================
 # numpy in pytorch functions

@@ -1,6 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch
+import torch.nn as nn
+import torch.distributions as D
 
 class PPOActorCritic(nn.Module):
     def __init__(self, state_dim, pulse_dim, hidden=256):
@@ -28,7 +31,33 @@ class PPOActorCritic(nn.Module):
         )
 
     def forward(self, state):
-        mean = self.actor(state)
-        std = torch.exp(self.log_std)
-        value = self.critic(state)
-        return mean, std, value
+        """
+        Returns:
+            dist  : torch.distributions.Distribution
+            value : state-value estimate
+        """
+        mean = self.actor(state)                 # (B, action_dim)
+        std = torch.exp(self.log_std)             # (action_dim,)
+        std = std.expand_as(mean)                 # match batch shape
+
+        dist = D.Normal(mean, std)                # policy distribution
+        value = self.critic(state).squeeze(-1)    # (B,)
+
+        return dist, value
+
+    def act(self, state):
+        """
+        Used during rollout
+        """
+        dist, value = self(state)
+
+        action = dist.sample()                    # (B, action_dim)
+        log_prob = dist.log_prob(action).sum(-1)  # (B,)
+
+        return action, log_prob, value
+
+    def evaluate(self, state, action):
+        dist, value = self(state)
+        log_prob = dist.log_prob(action).sum(-1)
+        entropy = dist.entropy().sum(-1)
+        return log_prob, entropy, value
